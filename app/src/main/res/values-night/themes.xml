@@ -1,0 +1,7 @@
+<resources>
+    <style name="Base.Theme.RegularLudo" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="fontFamily">@font/baloo</item>
+    </style>
+    <style name="Theme.RegularLudo" parent="Base.Theme.RegularLudo" />
+</resources>
