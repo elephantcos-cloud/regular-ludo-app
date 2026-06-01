@@ -16,13 +16,6 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install NDK and CMake
-        run: |
-          sdkmanager "ndk;25.2.9519653" "cmake;3.22.1"
-
       - name: Make gradlew executable
         run: chmod +x gradlew
 

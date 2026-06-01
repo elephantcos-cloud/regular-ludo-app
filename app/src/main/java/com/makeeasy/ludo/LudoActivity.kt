@@ -15,7 +15,7 @@ import android.widget.LinearLayout
 import android.widget.RelativeLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import com.makeeasy.ludo.engine.LudoEngine
+import com.makeeasy.ludo.engine.LudoAI
 import com.makeeasy.ludo.game.Dice
 import com.makeeasy.ludo.game.GamePath
 
@@ -30,8 +30,8 @@ class LudoActivity : AppCompatActivity() {
 
     private val PLAY_TIME = 15000L
 
-    // AI engine — HARD difficulty; reset at game start
-    private val aiEngine = LudoEngine(LudoEngine.HARD)
+    // AI — initialised after paths are ready
+    private lateinit var ludoAI: LudoAI
 
     private var height = 0
     private var width  = 0
@@ -41,7 +41,7 @@ class LudoActivity : AppCompatActivity() {
     private var playerNo = 0
     private var temp   = 0
     private lateinit var dice: Dice
-    private var extraChance        = false
+    private var extraChance = false
     private var isDestinationComplete = false
     private lateinit var jumping: MediaPlayer
     private lateinit var boing:   MediaPlayer
@@ -81,25 +81,24 @@ class LudoActivity : AppCompatActivity() {
     private lateinit var redPlayerPanel:  LinearLayout
     private lateinit var bluePlayerPanel: LinearLayout
 
-    private var hasRolledDice      = false
+    private var hasRolledDice       = false
     private var lastMovedPieceIndex = -1
     private var lastMovedPlayerNo   = -1
 
-    // ── Returns true if the current player should be controlled by AI ──
-    // Yellow (playerNo=4) is always the human player.
+    // ── Returns true if current player is AI-controlled ──────────
+    // Yellow (playerNo=4) is always the human.
     private fun isAiPlayer(): Boolean = isComputerMode && playerNo != 4
 
-    // ── Build walkedX 2D array for the engine ──
-    // Engine expects: [4][4] where index 0=Red,1=Green,2=Blue,3=Yellow
-    private fun buildWalkedForEngine(): Array<IntArray> = arrayOf(
-        walkedRed, walkedGreen, walkedBlue, walkedYellow
-    )
+    // ── Build walked state for the AI engine ─────────────────────
+    private fun walkedState(): Array<IntArray> =
+        arrayOf(walkedRed, walkedGreen, walkedBlue, walkedYellow)
+
+    // ── Map playerNo (1-based) to AI player index (0-based) ──────
+    private fun aiPlayerIndex(): Int = playerNo - 1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_ludo)
-
-        aiEngine.reset()
 
         boing   = MediaPlayer.create(this, R.raw.boing)
         jumping = MediaPlayer.create(this, R.raw.jump)
@@ -149,6 +148,12 @@ class LudoActivity : AppCompatActivity() {
         yellowPath = gamePath.yellowPath()
         starsPath  = gamePath.starPath()
 
+        // ── Initialise AI after paths are known ───────────────────
+        ludoAI = LudoAI(
+            paths      = arrayOf(redPath, greenPath, bluePath, yellowPath),
+            safeCoords = starsPath.toSet()
+        )
+
         for (element in playerList) placePlayerInHome(element)
 
         when (playerCount) {
@@ -156,76 +161,76 @@ class LudoActivity : AppCompatActivity() {
                 redPlayerPanel.visibility  = View.GONE
                 bluePlayerPanel.visibility = View.GONE
             }
-            3 -> {
-                bluePlayerPanel.visibility = View.GONE
-            }
+            3 -> bluePlayerPanel.visibility = View.GONE
         }
 
         dice = Dice(this)
         dice.layoutParams = ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
         dice.setOnClickListener {
             hasRolledDice = true
-            val walked: IntArray
+            val walked:   IntArray
             val allGutty: Array<ImageView>
-            val path: Array<String>
+            val path:     Array<String>
             when (playerNo) {
-                1    -> { walked = walkedRed;    allGutty = arrayOf(red1,red2,red3,red4);             path = redPath    }
-                2    -> { walked = walkedGreen;  allGutty = arrayOf(green1,green2,green3,green4);     path = greenPath  }
-                3    -> { walked = walkedBlue;   allGutty = arrayOf(blue1,blue2,blue3,blue4);         path = bluePath   }
-                else -> { walked = walkedYellow; allGutty = arrayOf(yellow1,yellow2,yellow3,yellow4); path = yellowPath }
+                1    -> { walked=walkedRed;    allGutty=arrayOf(red1,red2,red3,red4);             path=redPath    }
+                2    -> { walked=walkedGreen;  allGutty=arrayOf(green1,green2,green3,green4);     path=greenPath  }
+                3    -> { walked=walkedBlue;   allGutty=arrayOf(blue1,blue2,blue3,blue4);         path=bluePath   }
+                else -> { walked=walkedYellow; allGutty=arrayOf(yellow1,yellow2,yellow3,yellow4); path=yellowPath }
             }
             dice.startRolling(object : Dice.OnRollingCompleteListener {
                 override fun onComplete(num: Int) {
                     number = num
                     val movable = allGutty.indices.filter { i ->
                         val w = walked[i]
-                        (w > 0 && w < path.size && w + num <= path.size) || (w == 0 && num == 6)
+                        (w == 0 && num == 6) ||
+                        (w in 1 until 57 && w + num <= 57)
                     }
                     when {
                         movable.isEmpty() -> moveToNextPlayer()
 
-                        // ── AI picks the best piece ──────────────────────────
+                        // ── AI picks the best piece ───────────────
                         isAiPlayer() -> {
                             Handler(Looper.myLooper()!!).postDelayed({
-                                val enginePlayer = playerNo - 1  // 0-based for engine
-                                val bestPiece = try {
-                                    aiEngine.getBestMove(buildWalkedForEngine(), enginePlayer, num)
-                                } catch (e: Exception) { -1 }
-
-                                val pieceToMove = when {
-                                    bestPiece >= 0 && movable.contains(bestPiece) -> bestPiece
-                                    else -> movable[0]
-                                }
+                                val best = ludoAI.getBestMove(
+                                    walked    = walkedState(),
+                                    playerIdx = aiPlayerIndex(),
+                                    dice      = num
+                                )
+                                val pieceToMove = if (best >= 0 && movable.contains(best))
+                                    best else movable[0]
                                 guttyClickListener(pieceToMove, allGutty[pieceToMove], path)
                             }, 700)
                         }
 
-                        movable.size == 1 -> guttyClickListener(movable[0], allGutty[movable[0]], path)
+                        movable.size == 1 ->
+                            guttyClickListener(movable[0], allGutty[movable[0]], path)
+
                         else -> movable.forEach { i ->
-                            allGutty[i].bringToFront(); allGutty[i].isClickable = true
+                            allGutty[i].bringToFront()
+                            allGutty[i].isClickable = true
                         }
                     }
                 }
             })
         }
 
-        // Human piece click listeners (unchanged)
-        red1.setOnClickListener    { if (playerNo == 1 && !isAiPlayer()) guttyClickListener(0, red1,    redPath) }
-        red2.setOnClickListener    { if (playerNo == 1 && !isAiPlayer()) guttyClickListener(1, red2,    redPath) }
-        red3.setOnClickListener    { if (playerNo == 1 && !isAiPlayer()) guttyClickListener(2, red3,    redPath) }
-        red4.setOnClickListener    { if (playerNo == 1 && !isAiPlayer()) guttyClickListener(3, red4,    redPath) }
-        green1.setOnClickListener  { if (playerNo == 2 && !isAiPlayer()) guttyClickListener(0, green1,  greenPath) }
-        green2.setOnClickListener  { if (playerNo == 2 && !isAiPlayer()) guttyClickListener(1, green2,  greenPath) }
-        green3.setOnClickListener  { if (playerNo == 2 && !isAiPlayer()) guttyClickListener(2, green3,  greenPath) }
-        green4.setOnClickListener  { if (playerNo == 2 && !isAiPlayer()) guttyClickListener(3, green4,  greenPath) }
-        blue1.setOnClickListener   { if (playerNo == 3 && !isAiPlayer()) guttyClickListener(0, blue1,   bluePath) }
-        blue2.setOnClickListener   { if (playerNo == 3 && !isAiPlayer()) guttyClickListener(1, blue2,   bluePath) }
-        blue3.setOnClickListener   { if (playerNo == 3 && !isAiPlayer()) guttyClickListener(2, blue3,   bluePath) }
-        blue4.setOnClickListener   { if (playerNo == 3 && !isAiPlayer()) guttyClickListener(3, blue4,   bluePath) }
-        yellow1.setOnClickListener { if (playerNo == 4) guttyClickListener(0, yellow1, yellowPath) }
-        yellow2.setOnClickListener { if (playerNo == 4) guttyClickListener(1, yellow2, yellowPath) }
-        yellow3.setOnClickListener { if (playerNo == 4) guttyClickListener(2, yellow3, yellowPath) }
-        yellow4.setOnClickListener { if (playerNo == 4) guttyClickListener(3, yellow4, yellowPath) }
+        // Human piece click listeners (only active when it's their turn)
+        red1.setOnClickListener    { if (playerNo==1 && !isAiPlayer()) guttyClickListener(0,red1,redPath) }
+        red2.setOnClickListener    { if (playerNo==1 && !isAiPlayer()) guttyClickListener(1,red2,redPath) }
+        red3.setOnClickListener    { if (playerNo==1 && !isAiPlayer()) guttyClickListener(2,red3,redPath) }
+        red4.setOnClickListener    { if (playerNo==1 && !isAiPlayer()) guttyClickListener(3,red4,redPath) }
+        green1.setOnClickListener  { if (playerNo==2 && !isAiPlayer()) guttyClickListener(0,green1,greenPath) }
+        green2.setOnClickListener  { if (playerNo==2 && !isAiPlayer()) guttyClickListener(1,green2,greenPath) }
+        green3.setOnClickListener  { if (playerNo==2 && !isAiPlayer()) guttyClickListener(2,green3,greenPath) }
+        green4.setOnClickListener  { if (playerNo==2 && !isAiPlayer()) guttyClickListener(3,green4,greenPath) }
+        blue1.setOnClickListener   { if (playerNo==3 && !isAiPlayer()) guttyClickListener(0,blue1,bluePath) }
+        blue2.setOnClickListener   { if (playerNo==3 && !isAiPlayer()) guttyClickListener(1,blue2,bluePath) }
+        blue3.setOnClickListener   { if (playerNo==3 && !isAiPlayer()) guttyClickListener(2,blue3,bluePath) }
+        blue4.setOnClickListener   { if (playerNo==3 && !isAiPlayer()) guttyClickListener(3,blue4,bluePath) }
+        yellow1.setOnClickListener { if (playerNo==4) guttyClickListener(0,yellow1,yellowPath) }
+        yellow2.setOnClickListener { if (playerNo==4) guttyClickListener(1,yellow2,yellowPath) }
+        yellow3.setOnClickListener { if (playerNo==4) guttyClickListener(2,yellow3,yellowPath) }
+        yellow4.setOnClickListener { if (playerNo==4) guttyClickListener(3,yellow4,yellowPath) }
 
         playerNo = 4
         mainView.visibility = View.VISIBLE
@@ -279,11 +284,11 @@ class LudoActivity : AppCompatActivity() {
         else { extraChance = false; setDiceClickable() }
     }
 
-    private fun isMovePossible(gutty: Int): Boolean {
-        val total = gutty + number
+    private fun isMovePossible(guttyWalked: Int): Boolean {
+        val total = guttyWalked + number
         if (!extraChance) extraChance = number == 6
-        isDestinationComplete = total == redPath.size
-        return gutty > 0 && gutty < redPath.size && total <= redPath.size
+        isDestinationComplete = total == 57
+        return guttyWalked > 0 && guttyWalked < 57 && total <= 57
     }
 
     private fun stepByStep(jump: Int, gutty: ImageView, path: Array<String>) {
@@ -307,22 +312,22 @@ class LudoActivity : AppCompatActivity() {
         player.layoutParams.width  = d - (d / 10)
         val lp = player.layoutParams as RelativeLayout.LayoutParams
         when (player.id) {
-            R.id.red1    -> { lp.leftMargin=3*d/2;       lp.topMargin=top+3*d/2;        player.layoutParams=lp; walkedRed[0]=0    }
-            R.id.red2    -> { lp.leftMargin=2*d+3*d/2;   lp.topMargin=top+3*d/2;        player.layoutParams=lp; walkedRed[1]=0    }
-            R.id.red3    -> { lp.leftMargin=3*d/2;       lp.topMargin=2*d+top+3*d/2;    player.layoutParams=lp; walkedRed[2]=0    }
-            R.id.red4    -> { lp.leftMargin=2*d+3*d/2;   lp.topMargin=2*d+top+3*d/2;    player.layoutParams=lp; walkedRed[3]=0    }
-            R.id.green1  -> { lp.leftMargin=9*d+3*d/2;   lp.topMargin=top+3*d/2;        player.layoutParams=lp; walkedGreen[0]=0  }
-            R.id.green2  -> { lp.leftMargin=11*d+3*d/2;  lp.topMargin=top+3*d/2;        player.layoutParams=lp; walkedGreen[1]=0  }
-            R.id.green3  -> { lp.leftMargin=9*d+3*d/2;   lp.topMargin=2*d+top+3*d/2;    player.layoutParams=lp; walkedGreen[2]=0  }
-            R.id.green4  -> { lp.leftMargin=11*d+3*d/2;  lp.topMargin=2*d+top+3*d/2;    player.layoutParams=lp; walkedGreen[3]=0  }
-            R.id.yellow1 -> { lp.leftMargin=3*d/2;       lp.topMargin=9*d+top+3*d/2;    player.layoutParams=lp; walkedYellow[0]=0 }
-            R.id.yellow2 -> { lp.leftMargin=2*d+3*d/2;   lp.topMargin=9*d+top+3*d/2;    player.layoutParams=lp; walkedYellow[1]=0 }
-            R.id.yellow3 -> { lp.leftMargin=3*d/2;       lp.topMargin=11*d+top+3*d/2;   player.layoutParams=lp; walkedYellow[2]=0 }
-            R.id.yellow4 -> { lp.leftMargin=2*d+3*d/2;   lp.topMargin=11*d+top+3*d/2;   player.layoutParams=lp; walkedYellow[3]=0 }
-            R.id.blue1   -> { lp.leftMargin=9*d+3*d/2;   lp.topMargin=9*d+top+3*d/2;    player.layoutParams=lp; walkedBlue[0]=0   }
-            R.id.blue2   -> { lp.leftMargin=11*d+3*d/2;  lp.topMargin=9*d+top+3*d/2;    player.layoutParams=lp; walkedBlue[1]=0   }
-            R.id.blue3   -> { lp.leftMargin=9*d+3*d/2;   lp.topMargin=11*d+top+3*d/2;   player.layoutParams=lp; walkedBlue[2]=0   }
-            R.id.blue4   -> { lp.leftMargin=11*d+3*d/2;  lp.topMargin=11*d+top+3*d/2;   player.layoutParams=lp; walkedBlue[3]=0   }
+            R.id.red1    -> { lp.leftMargin=3*d/2;       lp.topMargin=top+3*d/2;       player.layoutParams=lp; walkedRed[0]=0    }
+            R.id.red2    -> { lp.leftMargin=2*d+3*d/2;   lp.topMargin=top+3*d/2;       player.layoutParams=lp; walkedRed[1]=0    }
+            R.id.red3    -> { lp.leftMargin=3*d/2;       lp.topMargin=2*d+top+3*d/2;   player.layoutParams=lp; walkedRed[2]=0    }
+            R.id.red4    -> { lp.leftMargin=2*d+3*d/2;   lp.topMargin=2*d+top+3*d/2;   player.layoutParams=lp; walkedRed[3]=0    }
+            R.id.green1  -> { lp.leftMargin=9*d+3*d/2;   lp.topMargin=top+3*d/2;       player.layoutParams=lp; walkedGreen[0]=0  }
+            R.id.green2  -> { lp.leftMargin=11*d+3*d/2;  lp.topMargin=top+3*d/2;       player.layoutParams=lp; walkedGreen[1]=0  }
+            R.id.green3  -> { lp.leftMargin=9*d+3*d/2;   lp.topMargin=2*d+top+3*d/2;   player.layoutParams=lp; walkedGreen[2]=0  }
+            R.id.green4  -> { lp.leftMargin=11*d+3*d/2;  lp.topMargin=2*d+top+3*d/2;   player.layoutParams=lp; walkedGreen[3]=0  }
+            R.id.yellow1 -> { lp.leftMargin=3*d/2;       lp.topMargin=9*d+top+3*d/2;   player.layoutParams=lp; walkedYellow[0]=0 }
+            R.id.yellow2 -> { lp.leftMargin=2*d+3*d/2;   lp.topMargin=9*d+top+3*d/2;   player.layoutParams=lp; walkedYellow[1]=0 }
+            R.id.yellow3 -> { lp.leftMargin=3*d/2;       lp.topMargin=11*d+top+3*d/2;  player.layoutParams=lp; walkedYellow[2]=0 }
+            R.id.yellow4 -> { lp.leftMargin=2*d+3*d/2;   lp.topMargin=11*d+top+3*d/2;  player.layoutParams=lp; walkedYellow[3]=0 }
+            R.id.blue1   -> { lp.leftMargin=9*d+3*d/2;   lp.topMargin=9*d+top+3*d/2;   player.layoutParams=lp; walkedBlue[0]=0   }
+            R.id.blue2   -> { lp.leftMargin=11*d+3*d/2;  lp.topMargin=9*d+top+3*d/2;   player.layoutParams=lp; walkedBlue[1]=0   }
+            R.id.blue3   -> { lp.leftMargin=9*d+3*d/2;   lp.topMargin=11*d+top+3*d/2;  player.layoutParams=lp; walkedBlue[2]=0   }
+            R.id.blue4   -> { lp.leftMargin=11*d+3*d/2;  lp.topMargin=11*d+top+3*d/2;  player.layoutParams=lp; walkedBlue[3]=0   }
         }
     }
 
@@ -331,36 +336,35 @@ class LudoActivity : AppCompatActivity() {
         setPlayerInactive()
         hasRolledDice = false
         when (playerNo) {
-            1 -> { dice4Red.addView(dice);    count1.visibility = View.VISIBLE }
-            2 -> { dice4Green.addView(dice);  count2.visibility = View.VISIBLE }
-            3 -> { dice4Blue.addView(dice);   count3.visibility = View.VISIBLE }
-            4 -> { dice4Yellow.addView(dice); count4.visibility = View.VISIBLE }
+            1    -> { dice4Red.addView(dice);    count1.visibility=View.VISIBLE }
+            2    -> { dice4Green.addView(dice);  count2.visibility=View.VISIBLE }
+            3    -> { dice4Blue.addView(dice);   count3.visibility=View.VISIBLE }
+            else -> { dice4Yellow.addView(dice); count4.visibility=View.VISIBLE }
         }
         dice.active()
 
-        // ── If AI player, auto-roll the dice after a short delay ──
+        // ── AI auto-rolls ─────────────────────────────────────────
         if (isAiPlayer()) {
             Handler(Looper.myLooper()!!).postDelayed({
                 dice.performClick()
-            }, 1200)
-            return  // Skip countdown timer for AI (no need to wait for human input)
+            }, 1000)
+            return   // No countdown timer for AI
         }
 
+        // Human countdown
         count = object : CountDownTimer(PLAY_TIME, 1000) {
             override fun onTick(millisUntilFinished: Long) {
+                val s = (millisUntilFinished / 1000).toString()
                 when (playerNo) {
-                    1 -> count1.text = (millisUntilFinished / 1000).toString()
-                    2 -> count2.text = (millisUntilFinished / 1000).toString()
-                    3 -> count3.text = (millisUntilFinished / 1000).toString()
-                    4 -> count4.text = (millisUntilFinished / 1000).toString()
+                    1    -> count1.text = s
+                    2    -> count2.text = s
+                    3    -> count3.text = s
+                    else -> count4.text = s
                 }
             }
             override fun onFinish() {
-                if (!hasRolledDice) {
-                    dice.performClick()
-                } else {
-                    autoMoveLastPiece()
-                }
+                if (!hasRolledDice) dice.performClick()
+                else autoMoveLastPiece()
             }
         }
         count!!.start()
@@ -368,8 +372,8 @@ class LudoActivity : AppCompatActivity() {
 
     private fun autoMoveLastPiece() {
         val allGutty: Array<ImageView>
-        val path: Array<String>
-        val walked: IntArray
+        val path:     Array<String>
+        val walked:   IntArray
         when (playerNo) {
             1    -> { allGutty=arrayOf(red1,red2,red3,red4);             path=redPath;    walked=walkedRed    }
             2    -> { allGutty=arrayOf(green1,green2,green3,green4);     path=greenPath;  walked=walkedGreen  }
@@ -378,12 +382,12 @@ class LudoActivity : AppCompatActivity() {
         }
         val movable = allGutty.indices.filter { i ->
             val w = walked[i]
-            (w > 0 && w < path.size && w + number <= path.size) || (w == 0 && number == 6)
+            (w==0 && number==6) || (w in 1 until 57 && w+number<=57)
         }
         if (movable.isEmpty()) { moveToNextPlayer(); return }
-        val preferred = if (lastMovedPlayerNo == playerNo &&
-            lastMovedPieceIndex >= 0 &&
-            movable.contains(lastMovedPieceIndex)) lastMovedPieceIndex else movable[0]
+        val preferred = if (lastMovedPlayerNo==playerNo &&
+            lastMovedPieceIndex>=0 && movable.contains(lastMovedPieceIndex))
+            lastMovedPieceIndex else movable[0]
         guttyClickListener(preferred, allGutty[preferred], path)
     }
 
@@ -399,7 +403,7 @@ class LudoActivity : AppCompatActivity() {
     }
 
     private fun checkConflictOfPosition(gutty: ImageView) {
-        var lp = ""; var iv: ImageView? = null; var actionRequired = false
+        var lp=""; var iv: ImageView?=null; var actionRequired=false
         val reds    = listOf(green1,green2,green3,green4,blue1,blue2,blue3,blue4,yellow1,yellow2,yellow3,yellow4)
         val greens  = listOf(red1,red2,red3,red4,blue1,blue2,blue3,blue4,yellow1,yellow2,yellow3,yellow4)
         val blues   = listOf(red1,red2,red3,red4,green1,green2,green3,green4,yellow1,yellow2,yellow3,yellow4)
@@ -407,7 +411,7 @@ class LudoActivity : AppCompatActivity() {
         val opponents = when (playerNo) { 1->reds; 2->greens; 3->blues; else->yellows }
         for (element in opponents) {
             val plp = element.layoutParams as RelativeLayout.LayoutParams
-            val alp = gutty.layoutParams as RelativeLayout.LayoutParams
+            val alp = gutty.layoutParams   as RelativeLayout.LayoutParams
             lp = "${plp.leftMargin},${plp.topMargin}"
             if (plp.leftMargin==alp.leftMargin && plp.topMargin==alp.topMargin
                 && !starsPath.contains(lp) && !opponents.contains(gutty)) {
@@ -417,7 +421,7 @@ class LudoActivity : AppCompatActivity() {
         if (actionRequired) { moveBackward(iv!!, lp); boing.start() }
         else when {
             isDestinationComplete -> checkWinCase(gutty)
-            extraChance           -> { extraChance = false; setDiceClickable() }
+            extraChance           -> { extraChance=false; setDiceClickable() }
             else                  -> moveToNextPlayer()
         }
     }
@@ -446,7 +450,7 @@ class LudoActivity : AppCompatActivity() {
     }
 
     private fun checkWinCase(p: ImageView) {
-        var winner = 9; var who: View? = null
+        var winner=9; var who: View?=null
         when (p.id) {
             R.id.red1,R.id.red2,R.id.red3,R.id.red4 ->
                 if (walkedRed[0]==57&&walkedRed[1]==57&&walkedRed[2]==57&&walkedRed[3]==57)
@@ -461,7 +465,7 @@ class LudoActivity : AppCompatActivity() {
                 if (walkedYellow[0]==57&&walkedYellow[1]==57&&walkedYellow[2]==57&&walkedYellow[3]==57)
                 { winner=4; who=findViewById(R.id.rankYellow) }
         }
-        if (winner != 9) declareWinner(winner, who!!)
+        if (winner!=9) declareWinner(winner, who!!)
         else if (extraChance) { extraChance=false; setDiceClickable() }
         else moveToNextPlayer()
     }
@@ -469,13 +473,13 @@ class LudoActivity : AppCompatActivity() {
     private fun declareWinner(winner: Int, who: View) {
         if (winnerList.isEmpty()) {
             winnerList.add(winner); who.setBackgroundResource(R.drawable.fst); who.visibility=View.VISIBLE
-            if (playerCount==2) Result(this, winnerList).show() else moveToNextPlayer()
+            if (playerCount==2) Result(this,winnerList).show() else moveToNextPlayer()
         } else if (winnerList.size==1) {
             winnerList.add(winner); who.setBackgroundResource(R.drawable.scnd); who.visibility=View.VISIBLE
-            if (playerCount==3) Result(this, winnerList).show() else moveToNextPlayer()
+            if (playerCount==3) Result(this,winnerList).show() else moveToNextPlayer()
         } else if (winnerList.size==2) {
             winnerList.add(winner); who.setBackgroundResource(R.drawable.trd); who.visibility=View.VISIBLE
-            Result(this, winnerList).show()
+            Result(this,winnerList).show()
         }
     }
 }
