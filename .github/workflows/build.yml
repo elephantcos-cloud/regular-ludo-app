@@ -16,6 +16,13 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager "ndk;25.2.9519653" "cmake;3.22.1"
+
       - name: Make gradlew executable
         run: chmod +x gradlew
 
@@ -25,5 +32,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ludo-debug
+          name: ludo-ai-debug
           path: app/build/outputs/apk/debug/*.apk
