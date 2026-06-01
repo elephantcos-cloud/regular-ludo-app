@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">RegularLudo</string>
+    <string name="todo">todo</string>
+    <string name="close">Close</string>
+    <string name="contact_us">Contact Us</string>
+    <string name="privacy_policy">Privacy Policy</string>
+    <string name="game_rules">Game Rules</string>
+    <string name="about_us">About Us</string>
+</resources>
